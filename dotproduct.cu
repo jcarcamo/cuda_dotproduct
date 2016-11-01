@@ -7,9 +7,28 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define BLOCK_SIZE 32
+#define BLOCK_SIZE 64
  
+__global__ void kernel_dotproduct(int *force_d, int *distance_d, int *result_d) {
+    extern __shared__ int sdata[];
+    // each thread loads one element from global to shared mem
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x
+    *blockDim.x + threadIdx.x;
+    sdata[tid] = force_d[i]*distance_d[i];
+    __syncthreads();
+    // do reduction in shared mem
+    for (unsigned int s=1; s < blockDim.x; s *= 2) {
+      if (tid % (2*s) == 0) {
+      sdata[tid] += sdata[tid + s];
+      }
+      __syncthreads();
+    }
+    // write result for this block to global mem
+    if (tid == 0) result_d[blockIdx.x] = sdata[0];
+}
 
+/*
 template <unsigned int blockSize>
 __global__ void reduce6(int *force_d, int *distance_d, int *result_d, unsigned int size)
 {
@@ -20,15 +39,12 @@ __global__ void reduce6(int *force_d, int *distance_d, int *result_d, unsigned i
     sdata[tid] = 0;
     //while (i < size) { sdata[tid] += force_d[i]*distance_d[i] + force_d[i+blockSize]*distance_d[i+blockSize]; i += gridSize; }
     while (i < size) { 
-	if(i+blockSize < size){
-		sdata[tid] += force_d[i] + force_d[i+blockSize];
-    	}
+	sdata[tid] += force_d[i] + force_d[i+blockSize];
 	i += gridSize;
-    }*/
+    }// /
     unsigned int tid = threadIdx.x;
     unsigned int i = blockIdx.x*(blockDim.x*2) + threadIdx.x;
-    if((i+blockDim.x) < size)
-    	sdata[tid] = force_d[i] + force_d[i+blockDim.x];
+    sdata[tid] = force_d[i] + force_d[i+blockDim.x];
     __syncthreads();
     if (blockSize >= 512) { if (tid < 256) { sdata[tid] += sdata[tid + 256]; } __syncthreads(); }
     if (blockSize >= 256) { if (tid < 128) { sdata[tid] += sdata[tid + 128]; } __syncthreads(); }
@@ -57,7 +73,7 @@ __global__ void kernel_dotproduct (int *force_d, int *distance_d)
 	force_d[x] = blockIdx.x;
 	distance_d[x] = threadIdx.x;
 }
-
+*/
 
 // This function is called from the host computer.
 // It manages memory and calls the function that is executed on the GPU
@@ -101,7 +117,7 @@ extern "C" void cuda_dotproduct (int *force, int *distance, int arraySize, int *
         
         op_result = cudaMemcpy (result_d, distance, sizeof(int) * arraySize, cudaMemcpyHostToDevice);
         if (op_result != cudaSuccess) {
-                fprintf(stderr, "cudaMemcpy host->dev (distance) failed.");
+                fprintf(stderr, "cudaMemcpy host->dev (result) failed.");
                 exit(1);
         }
 	
@@ -110,9 +126,9 @@ extern "C" void cuda_dotproduct (int *force, int *distance, int arraySize, int *
 	dim3 dimgrid (arraySize/BLOCK_SIZE);
         int smemSize = dimblock.x * sizeof(int);
 	// actual computation: Call the kernel
-	//kernel_dotproduct <<<dimgrid, dimblock>>> (force_d, distance_d);
-        reduce6<BLOCK_SIZE><<<dimgrid,dimblock,smemSize>>>(force_d, distance_d,result_d,arraySize);
-	// transfer results back to host
+	kernel_dotproduct<<<dimgrid,dimblock,smemSize>>>(force_d, distance_d, result_d);
+	
+        // transfer results back to host
 	op_result = cudaMemcpy (force, force_d, sizeof(int) * arraySize, cudaMemcpyDeviceToHost);
 	if (op_result != cudaSuccess) {
 		fprintf(stderr, "cudaMemcpy host <- dev (force) failed.");
