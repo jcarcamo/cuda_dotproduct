@@ -10,7 +10,7 @@
  */
 
 #include <stdio.h>
-#define SIZEOFARRAY 64 
+#define SIZEOFARRAY 75 
 
 // The serial function dotproduct
 void serial_dotproduct(int *force, int *distance, int size, int *result)
@@ -72,7 +72,7 @@ int main (int argc, char *argv[])
     int cuda_result = 0;
     // Call the function that will call the GPU function
     cuda_dotproduct (force, distance, SIZEOFARRAY, &cuda_result);
-
+    printf("CUDA result: %d \n",cuda_result);
     // Again, print the arrays
     printf ("Final state of the force array:\n");
     for (i=0; i < SIZEOFARRAY; i++) {
