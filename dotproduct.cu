@@ -10,7 +10,7 @@
 #define BLOCK_SIZE 64
 
 __global__ void kernel_dotproduct(int *force_d, int *distance_d, int *result_d, unsigned int size) {
-    extern __shared__ int sdata[];
+    extern __shared__ int sadata[];
     
     int n = blockDim.x;
     int nTotalThreads;
@@ -30,21 +30,21 @@ __global__ void kernel_dotproduct(int *force_d, int *distance_d, int *result_d, 
     unsigned int tid = threadIdx.x;
     unsigned int i = blockIdx.x*nTotalThreads + threadIdx.x;
     if(i<size){
-    	sdata[tid] = force_d[i]*distance_d[i];
+    	sadata[tid] = force_d[i]*distance_d[i];
     }
     __syncthreads();
     
     // do reduction in shared mem
-    if(i < size ){
-        for (unsigned int s=1; s < nTotalThreads; s *= 2) {
-            if (tid % (2*s) == 0) {
-                sdata[tid] += sdata[tid + s];
-            }
-            __syncthreads();
+    //if(i < size){
+    for (unsigned int s=1; s < nTotalThreads; s *= 2) {
+        if (tid % (2*s) == 0) {
+            sadata[tid] += sadata[tid + s];
         }
-    }  
+        __syncthreads();
+    }
+    //}  
     // write result for this block to global mem
-    if (tid == 0) result_d[blockIdx.x] = sdata[0];
+    if (tid == 0) result_d[blockIdx.x] = sadata[0];
 }
 
 // The __global__ directive identifies this function as a kernel
@@ -139,13 +139,6 @@ extern "C" void cuda_dotproduct (int *force, int *distance, int arraySize, int *
                 exit(1);
         }
 
-	printf("result array: [");
-	for (i = 0; i < arraySize; i++){
-		printf(" %d ", result_array[i]);
-		*result += result_array[i]; 
-	}
-	printf("]\n");
-
 	// release the memory on the GPU 
 	op_result = cudaFree (force_d);
 	if (op_result != cudaSuccess) {
@@ -162,5 +155,12 @@ extern "C" void cuda_dotproduct (int *force, int *distance, int arraySize, int *
                 fprintf(stderr, "cudaFree (distance) failed.");
                 exit(1);
         }
+        
+        printf("result array: [");
+        for (i = 0; i < arraySize; i++){
+                printf(" %d ", result_array[i]);
+                *result += result_array[i];
+        }
+        printf("]\n");
 }
 
