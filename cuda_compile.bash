@@ -1,1 +1,1 @@
-nvcc dotproduct.c dotproduct.cu -o dotproduct
+nvcc -g -G dotproduct.c dotproduct.cu -o dotproduct
