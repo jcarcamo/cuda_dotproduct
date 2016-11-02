@@ -13,9 +13,9 @@
 #include <stdlib.h>
 #include <sys/time.h>
 
-#define SIZEOFARRAY 10000
+//#define SIZEOFARRAY 10240000
 
-struct timeval  ts1, ts2, tp1, tp2, tps1, tps2;
+struct timeval  ts1, ts2, tps1, tps2;
 // The serial function dotproduct
 void serial_dotproduct(long long *force, long long *distance, long long size, long long *result)
 {
@@ -26,10 +26,17 @@ void serial_dotproduct(long long *force, long long *distance, long long size, lo
 }
 
 // The function dotproduct is in the file dotproduct.cu
-extern void cuda_dotproduct(long long *force, long long *distance, long long size, long long *result_array, long long *result);
+extern void cuda_dotproduct(long long *force, long long *distance, long long size, long long *result_array, double *time_result);
 
 int main (int argc, char *argv[])
 {
+    long long SIZEOFARRAY;
+    if (argc !=  2){
+    	printf("Usage: dotproduct <array_size>\n");
+	exit(2);
+    }else{
+        SIZEOFARRAY = atoll(argv[1]);
+    }
     //timeval tv1, tv2;
     // Declare arrays and initialize to 0
     long long *force;
@@ -63,59 +70,29 @@ int main (int argc, char *argv[])
     }
     gettimeofday(&tps2, NULL);
     double tps_time = (double) (tps2.tv_usec - tps1.tv_usec) / 1000000 + (double) (tps2.tv_sec - tps1.tv_sec);
-    printf("tps: %f\n",tps_time);
     
-    // Print the initial arrays
-    /*
-    printf ("Initial state of the force array:\n");
-    for (i=0; i < SIZEOFARRAY; i++) {
-        printf ("%d ", force[i]);
-    }
-    printf ("\n");
-    printf ("Initial state of the distance array:\n");
-    for (i=0; i < SIZEOFARRAY; i++) {
-        printf ("%d ", distance[i]);
-    }
-    printf ("\n");
-    */
-
     // Serial dotproduct
     long long serial_result = 0;
     gettimeofday(&ts1, NULL);
     serial_dotproduct(force, distance, SIZEOFARRAY, &serial_result);
     gettimeofday(&ts2, NULL);
     double ts_time = (double) (ts2.tv_usec - ts1.tv_usec) / 1000000 + (double) (ts2.tv_sec - ts1.tv_sec);
-    printf("ts: %f\n",ts_time);
-    printf ("Serial dotproduct = %lld \n", serial_result);
     
-    long long cuda_result = 0; 
-    gettimeofday(&tp1, NULL);
+    double cuda_time_result = 0.0; 
     // Call the function that will call the GPU function
-    cuda_dotproduct (force, distance, SIZEOFARRAY, result_array, &cuda_result);
-    gettimeofday(&tp2, NULL);
-    double tp_time = (double) (tp2.tv_usec - tp1.tv_usec) / 1000000 + (double) (tp2.tv_sec - tp1.tv_sec);
-    printf("tp: %f\n",tp_time);
-    //printf("result array: [");
+    cuda_dotproduct (force, distance, SIZEOFARRAY, result_array, &cuda_time_result);
+    
+    long long cuda_result = 0;
     for (i = 0; i < SIZEOFARRAY; i++){
-        //printf(" %d ", result_array[i]);
-        /*if(result_array[i] != 0){
-            printf(" %d ", result_array[i]);
-        }*/
         cuda_result += result_array[i];
     }
-    //printf("]\n");
-    printf("CUDA result: %lld \n",cuda_result);
-    // Again, print the arrays
-    /*printf ("Final state of the force array:\n");
-    for (i=0; i < SIZEOFARRAY; i++) {
-        printf ("%d ", force[i]);
+    
+    if(serial_result == cuda_result){
+    	printf("array_size,ts,tps,tp\n");
+	printf("%lld,%.10f,%.10f,%.10f\n",SIZEOFARRAY,ts_time,tps_time,cuda_time_result);
+    }else{
+        printf("ERROR in CUDA calculation");
     }
-    printf ("\n");
-    printf ("Final state of the distance array:\n");
-    for (i=0; i < SIZEOFARRAY; i++) {
-        printf ("%d ", distance[i]);
-    }
-    printf ("\n");
-    */
     return 0;
 }
+

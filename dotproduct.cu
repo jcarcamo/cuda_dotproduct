@@ -1,13 +1,17 @@
 /*
- * blockAndThread.cu
+ * dotproduct.cu
  * includes setup funtion called from "driver" program
- * also includes kernel function 'cu_fillArray()'
+ * also includes kernel function 'kernel_dotproduct[2]()'
+ * largely inspired in the pdf http://www.cuvilib.com/Reduction.pdf
  */
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/time.h>
 
 #define BLOCK_SIZE 1024
+
+struct timeval  tp1, tp2;
 
 __global__ void kernel_dotproduct(long long *force_d, long long *distance_d, long long *result_d, long long size) {
     extern __shared__ long long sadata[];
@@ -29,6 +33,7 @@ __global__ void kernel_dotproduct(long long *force_d, long long *distance_d, lon
     // each thread loads one element from global to shared mem
     unsigned int tid = threadIdx.x;
     long long i = blockIdx.x*nTotalThreads + threadIdx.x;
+    sadata[tid] = 0;
     if(i < size){
     	sadata[tid] = force_d[i]*distance_d[i];
     }
@@ -37,7 +42,7 @@ __global__ void kernel_dotproduct(long long *force_d, long long *distance_d, lon
     // do reduction in shared mem
     //if(i < size){
     for (unsigned int s=1; s < nTotalThreads; s *= 2) {
-        if (tid % (2*s) == 0 && (tid+s) < size) {
+        if (tid % (2*s) == 0) {
             sadata[tid] += sadata[tid + s];
         }
         __syncthreads();
@@ -67,13 +72,12 @@ __global__ void kernel_dotproduct2(long long *force_d, long long *distance_d, lo
 
 	unsigned int tid = threadIdx.x;
 	long long i = blockIdx.x*(nTotalThreads*2) + threadIdx.x;
+	sdata[tid] = 0;
 	if((i+nTotalThreads)< size){
 		sdata[tid] = force_d[i]*distance_d[i] + force_d[i+nTotalThreads]*distance_d[i+nTotalThreads] ;
 	} else {
 		if(i < size){
 			sdata[tid] = force_d[i]*distance_d[i];
-		}else{
-			sdata[tid] = 0;
 		}
 	}
 	__syncthreads();
@@ -98,32 +102,25 @@ __global__ void kernel_dotproduct2(long long *force_d, long long *distance_d, lo
 	
 }
 
-// The __global__ directive identifies this function as a kernel
-// Note: all kernels must be declared with return type void 
-__global__ void kernel_check_threads (long long *force_d, long long *distance_d)
-{
-    long long x;
-
-    // Note: CUDA contains several built-in variables
-    // blockIdx.x returns the blockId in the x dimension
-    // threadIdx.x returns the threadId in the x dimension
-    x = blockIdx.x * BLOCK_SIZE + threadIdx.x;
-    force_d[x] = blockIdx.x;
-    distance_d[x] = threadIdx.x;
-}
-
-
 // This function is called from the host computer.
 // It manages memory and calls the function that is executed on the GPU
-extern "C" void cuda_dotproduct (long long *force, long long *distance, long long arraySize, long long *result_array, long long *result)
+extern "C" void cuda_dotproduct (long long *force, long long *distance, long long arraySize, long long *result_array, double *time_result)
 {
-	// block_d and thread_d are the GPU counterparts of the arrays that exists in host memory 
+	// force_d, distance_d and result_d are the GPU counterparts of the arrays that exists in host memory 
 	long long *force_d;
 	long long *distance_d;
 	long long *result_d;
 
 	cudaError_t op_result;
-	
+
+	// Reset the device and exit
+    	op_result = cudaDeviceReset();
+
+    	if (op_result != cudaSuccess)
+    	{
+        	fprintf(stderr, "Failed to deinitialize the device! error=%s\n", cudaGetErrorString(op_result));
+        	exit(EXIT_FAILURE);
+    	}	
 	// allocate space in the device 
 	op_result = cudaMalloc ((void**) &force_d, sizeof(long long) * arraySize);
 	if (op_result != cudaSuccess) {
@@ -160,7 +157,9 @@ extern "C" void cuda_dotproduct (long long *force, long long *distance, long lon
         }
 	
 	int threads;
-	if (arraySize < 256 ){
+	if(arraySize < 128){
+		threads = 64;
+	} else if (arraySize < 256 ){
 		threads = 128;
 	} else if (arraySize < 512){
 		threads = 256;
@@ -175,10 +174,14 @@ extern "C" void cuda_dotproduct (long long *force, long long *distance, long lon
         dim3 dimblock (block_size);
         dim3 dimgrid (blocks);
         int smemSize = dimblock.x * sizeof(long long);
-        // actual computation: Call the kernel
-	//kernel_dotproduct<<<dimgrid,dimblock,smemSize>>>(force_d, distance_d, result_d, arraySize);
-        switch (threads)
+        
+	// actual computation: Call the kernel
+	gettimeofday(&tp1, NULL);
+	switch (threads)
 	{
+		case 64:
+                  kernel_dotproduct2<64><<<dimgrid,dimblock,smemSize>>>(force_d, distance_d, result_d, arraySize);
+                  break;
 		case 128:
 		  kernel_dotproduct2<128><<<dimgrid,dimblock,smemSize>>>(force_d, distance_d, result_d, arraySize);
 		  break;
@@ -192,18 +195,8 @@ extern "C" void cuda_dotproduct (long long *force, long long *distance, long lon
 		 kernel_dotproduct2<BLOCK_SIZE><<<dimgrid,dimblock,smemSize>>>(force_d, distance_d, result_d, arraySize); 
 		 break;
 	}
-	//kernel_check_threads<<<dimgrid,dimblock>>>(force_d, distance_d);
-        // transfer results back to host
-	op_result = cudaMemcpy (force, force_d, sizeof(long long) * arraySize, cudaMemcpyDeviceToHost);
-	if (op_result != cudaSuccess) {
-		fprintf(stderr, "cudaMemcpy host <- dev (force) failed.");
-		exit(1);
-	}
-	op_result = cudaMemcpy (distance, distance_d, sizeof(long long) * arraySize, cudaMemcpyDeviceToHost);
-	if (op_result != cudaSuccess) {
-		fprintf(stderr, "cudaMemcpy host <- dev (distance) failed.");
-		exit(1);
-	}
+	gettimeofday(&tp2, NULL);
+    	*time_result = (double) (tp2.tv_usec - tp1.tv_usec) / 1000000 + (double) (tp2.tv_sec - tp1.tv_sec);
 
 	op_result = cudaMemcpy (result_array, result_d, sizeof(long long)*arraySize, cudaMemcpyDeviceToHost);
         if (op_result != cudaSuccess) {
@@ -211,14 +204,6 @@ extern "C" void cuda_dotproduct (long long *force, long long *distance, long lon
                 exit(1);
         }
 	
-	int i,j = 0;
-	for (i = 0; i < arraySize; i++){
-		if(result_array[i] < 0){
-			j++;
-		}
-	}
-	printf("faulty # = %d \n",j);
-
 	// release the memory on the GPU 
 	op_result = cudaFree (force_d);
 	if (op_result != cudaSuccess) {
