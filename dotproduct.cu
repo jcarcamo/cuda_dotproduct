@@ -47,6 +47,57 @@ __global__ void kernel_dotproduct(long long *force_d, long long *distance_d, lon
     if (tid == 0) result_d[blockIdx.x] = sadata[0];
 }
 
+template <unsigned int blockSize>
+__global__ void kernel_dotproduct2(long long *force_d, long long *distance_d, long long *result_d, long long size)
+{
+	extern __shared__ long long sdata[];
+	int n = blockDim.x;
+    	int nTotalThreads;
+    	if (!n){
+        	nTotalThreads = n;
+    	}else{
+        	//(0 == 2^0)
+        	int x = 1;
+        	while(x < n)
+        	{
+            		x <<= 1;
+        	}
+        	nTotalThreads = x;
+    	}
+
+	unsigned int tid = threadIdx.x;
+	long long i = blockIdx.x*(nTotalThreads*2) + threadIdx.x;
+	if((i+nTotalThreads)< size){
+		sdata[tid] = force_d[i]*distance_d[i] + force_d[i+nTotalThreads]*distance_d[i+nTotalThreads] ;
+	} else {
+		if(i < size){
+			sdata[tid] = force_d[i]*distance_d[i];
+		}else{
+			sdata[tid] = 0;
+		}
+	}
+	__syncthreads();
+	for (long long s=nTotalThreads/2; s>32 && (tid+s) < size; s>>=1)
+	{
+		if (tid < s)
+			sdata[tid] += sdata[tid + s];
+		__syncthreads();
+	}
+	if (tid < 32)
+	{
+		sdata[tid] += sdata[tid + 32];
+		sdata[tid] += sdata[tid + 16];
+		sdata[tid] += sdata[tid + 8];
+		sdata[tid] += sdata[tid + 4];
+		sdata[tid] += sdata[tid + 2];
+		sdata[tid] += sdata[tid + 1];
+	}
+
+	// write result for this block to global mem
+	if (tid == 0) result_d[blockIdx.x] = sdata[0];
+	
+}
+
 // The __global__ directive identifies this function as a kernel
 // Note: all kernels must be declared with return type void 
 __global__ void kernel_check_threads (long long *force_d, long long *distance_d)
@@ -108,14 +159,40 @@ extern "C" void cuda_dotproduct (long long *force, long long *distance, long lon
                 exit(1);
         }
 	
-        long long blocks = ceil(arraySize / ((float) BLOCK_SIZE));
+	int threads;
+	if (arraySize < 256 ){
+		threads = 128;
+	} else if (arraySize < 512){
+		threads = 256;
+	} else if (arraySize < 1024){
+		threads = 512;
+	} else {
+		threads = BLOCK_SIZE;
+	}
+	long long block_size = threads;
+        long long blocks = ceil(arraySize / ((float) block_size));
 	// set execution configuration
-        dim3 dimblock (BLOCK_SIZE);
+        dim3 dimblock (block_size);
         dim3 dimgrid (blocks);
         int smemSize = dimblock.x * sizeof(long long);
         // actual computation: Call the kernel
-	kernel_dotproduct<<<dimgrid,dimblock,smemSize>>>(force_d, distance_d, result_d, arraySize);
-        //kernel_check_threads<<<dimgrid,dimblock>>>(force_d, distance_d);
+	//kernel_dotproduct<<<dimgrid,dimblock,smemSize>>>(force_d, distance_d, result_d, arraySize);
+        switch (threads)
+	{
+		case 128:
+		  kernel_dotproduct2<128><<<dimgrid,dimblock,smemSize>>>(force_d, distance_d, result_d, arraySize);
+		  break;
+		case 256:
+                  kernel_dotproduct2<256><<<dimgrid,dimblock,smemSize>>>(force_d, distance_d, result_d, arraySize);
+                  break;
+		case 512:
+                  kernel_dotproduct2<256><<<dimgrid,dimblock,smemSize>>>(force_d, distance_d, result_d, arraySize);
+                  break;
+		default:
+		 kernel_dotproduct2<BLOCK_SIZE><<<dimgrid,dimblock,smemSize>>>(force_d, distance_d, result_d, arraySize); 
+		 break;
+	}
+	//kernel_check_threads<<<dimgrid,dimblock>>>(force_d, distance_d);
         // transfer results back to host
 	op_result = cudaMemcpy (force, force_d, sizeof(long long) * arraySize, cudaMemcpyDeviceToHost);
 	if (op_result != cudaSuccess) {
@@ -133,6 +210,14 @@ extern "C" void cuda_dotproduct (long long *force, long long *distance, long lon
                 fprintf(stderr, "cudaMemcpy host <- dev (result) failed.");
                 exit(1);
         }
+	
+	int i,j = 0;
+	for (i = 0; i < arraySize; i++){
+		if(result_array[i] < 0){
+			j++;
+		}
+	}
+	printf("faulty # = %d \n",j);
 
 	// release the memory on the GPU 
 	op_result = cudaFree (force_d);

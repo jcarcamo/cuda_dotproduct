@@ -13,7 +13,7 @@
 #include <stdlib.h>
 #include <sys/time.h>
 
-#define SIZEOFARRAY 10240000
+#define SIZEOFARRAY 10000
 
 struct timeval  ts1, ts2, tp1, tp2, tps1, tps2;
 // The serial function dotproduct
